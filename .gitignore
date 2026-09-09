@@ -1,0 +1,18 @@
+# Sample medical records + all generated redaction outputs
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-clinical/
+
+# Claude Code session artifacts
+.claude/
+
+# OS
+.DS_Store

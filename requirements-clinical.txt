@@ -1,0 +1,15 @@
+# Separate environment for redact_clinical_eval.py (see .venv-clinical).
+#
+# Kept apart from requirements.txt/.venv on purpose: this platform's newest
+# available torch build (macOS x86_64 wheels stop at 2.2.2) needs numpy<2,
+# while presidio-image-redactor pins opencv-python>=4.13, which itself
+# requires numpy>=2. Both constraints can't be satisfied in one venv here,
+# and the clinical eval only needs the text pipeline (no opencv), so it
+# gets its own environment instead.
+numpy<2
+torch==2.2.2
+transformers
+spacy-huggingface-pipelines
+presidio-analyzer
+presidio-anonymizer
+pytesseract
