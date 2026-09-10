@@ -22,6 +22,17 @@ def main():
     parser.add_argument("--text-only", action="store_true")
     parser.add_argument("--image-only", action="store_true")
     parser.add_argument(
+        "--accident-date",
+        default=None,
+        help=(
+            "Date of accident (e.g. 03/15/2023), used as the anchor for "
+            "relative date redaction when a document doesn't itself "
+            "contain a 'Date of Accident' field for it to be found in. "
+            "If omitted, each document's own 'Date of Accident' field is "
+            "used as before."
+        ),
+    )
+    parser.add_argument(
         "--spacy-eval",
         action="store_true",
         help=(
@@ -41,13 +52,13 @@ def main():
         src = DATA_DIR / "encounters.md"
         dst = OUT_DIR / ("encounters.spacy_eval.md" if args.spacy_eval else "encounters.redacted.md")
         print(f"Redacting {src} -> {dst}")
-        redact_markdown_file(src, dst, eval_entities=eval_entities)
+        redact_markdown_file(src, dst, accident_date=args.accident_date, eval_entities=eval_entities)
 
     if do_image:
         src = DATA_DIR / "Patient_Intake.jpg"
         dst = OUT_DIR / ("Patient_Intake.spacy_eval.jpg" if args.spacy_eval else "Patient_Intake.redacted.jpg")
         print(f"Redacting {src} -> {dst}")
-        redact_image_file(src, dst, eval_entities=eval_entities)
+        redact_image_file(src, dst, accident_date=args.accident_date, eval_entities=eval_entities)
 
     print("Done.")
 

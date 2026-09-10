@@ -4,7 +4,7 @@ from typing import List, Optional
 from PIL import Image, ImageDraw
 from presidio_image_redactor import ImageAnalyzerEngine
 
-from .date_logic import find_accident_anchor
+from .date_logic import find_accident_anchor, parse_date_text
 from .engine import CUSTOM_ENTITIES, AnalyzerEngine, analyze_with_eval, build_analyzer_engine
 from .image_draw import draw_boxes, merge_bboxes
 
@@ -12,6 +12,7 @@ from .image_draw import draw_boxes, merge_bboxes
 def redact_image_file(
     input_path: Path,
     output_path: Path,
+    accident_date: Optional[str] = None,
     eval_entities: Optional[List[str]] = None,
     analyzer: Optional[AnalyzerEngine] = None,
 ) -> None:
@@ -23,7 +24,10 @@ def redact_image_file(
     ocr_result = image_analyzer.ocr.perform_ocr(image)
     ocr_result = image_analyzer.remove_space_boxes(ocr_result)
     ocr_text = image_analyzer.ocr.get_text_from_ocr_dict(ocr_result)
-    anchor = find_accident_anchor(ocr_text)
+    # Same override as the text path: use the supplied accident date as the
+    # anchor when this document doesn't carry its own "Date of Accident"
+    # field for OCR to find.
+    anchor = parse_date_text(accident_date) if accident_date else find_accident_anchor(ocr_text)
 
     if eval_entities:
         custom_results, ner_only_results = analyze_with_eval(ocr_text, analyzer, eval_entities)

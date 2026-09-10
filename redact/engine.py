@@ -27,7 +27,7 @@ from presidio_analyzer.predefined_recognizers import SpacyRecognizer
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
 
-from .date_logic import find_accident_anchor, redact_date_text
+from .date_logic import find_accident_anchor, parse_date_text, redact_date_text
 from .recognizers import (
     AccidentDateRecognizer,
     AccountNumberRecognizer,
@@ -247,11 +247,15 @@ def redact_text(
     text: str,
     analyzer: AnalyzerEngine,
     anonymizer: AnonymizerEngine,
-    anchor_override: Optional[str] = None,
+    accident_date: Optional[str] = None,
     eval_entities: Optional[List[str]] = None,
     eval_score_threshold: Optional[float] = None,
 ) -> str:
-    anchor = find_accident_anchor(text) if anchor_override is None else anchor_override
+    # If the caller supplies the accident date up front (e.g. it's missing
+    # from this particular document, so "Date of Accident: ..." can't be
+    # found in the text), use it as the anchor directly. Otherwise fall
+    # back to detecting it from the document as before.
+    anchor = parse_date_text(accident_date) if accident_date else find_accident_anchor(text)
 
     if eval_entities:
         custom_results, ner_only_results = analyze_with_eval(

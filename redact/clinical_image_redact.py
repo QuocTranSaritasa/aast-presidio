@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from PIL import Image, ImageDraw
 
-from .date_logic import find_accident_anchor
+from .date_logic import find_accident_anchor, parse_date_text
 from .engine import AnalyzerEngine, analyze_with_eval
 from .image_draw import draw_boxes, merge_bboxes
 from .ocr_utils import get_text_from_ocr_dict, map_results_to_bboxes, perform_ocr, remove_space_boxes
@@ -20,13 +20,14 @@ def redact_image_file_clinical(
     output_path: Path,
     eval_entities: List[str],
     analyzer: AnalyzerEngine,
+    accident_date: Optional[str] = None,
     eval_score_threshold: Optional[float] = None,
 ) -> None:
     image = Image.open(input_path).convert("RGB")
 
     ocr_result = remove_space_boxes(perform_ocr(image))
     ocr_text = get_text_from_ocr_dict(ocr_result)
-    anchor = find_accident_anchor(ocr_text)
+    anchor = parse_date_text(accident_date) if accident_date else find_accident_anchor(ocr_text)
 
     custom_results, ner_only_results = analyze_with_eval(
         ocr_text, analyzer, eval_entities, score_threshold=eval_score_threshold
