@@ -7,10 +7,10 @@ generic NER.
 
 ## What it does
 
-- **Text** (`data/encounters.md`): finds patient/provider/attorney names,
-  account numbers, home address/phone, age/sex, state, and dates, and
-  replaces each with a bracketed label, e.g. `[PATIENT NAME]`,
-  `[ACCOUNT NUMBER]`, `[AGE]`.
+- **Text** (`data/encounters.md`): finds patient/attorney names, account
+  numbers, home address/phone, age/sex, state, and dates, and replaces
+  each with a bracketed label, e.g. `[PATIENT NAME]`, `[ACCOUNT NUMBER]`,
+  `[AGE]`.
 - **Image** (`data/Patient_Intake.jpg`): same detection, run over OCR'd
   text (Tesseract), drawn back onto the image as black boxes with the
   label baked in.
@@ -19,9 +19,12 @@ generic NER.
   (`[113 DAYS POST ACCIDENT]` / `[40 DAYS PRE ACCIDENT]`); anything
   farther out (e.g. a date of birth) becomes a generic `[DATE]`.
 
-Scope note: the clinic's own letterhead (address/phone/name) and the
-accident scene's street location are intentionally left unredacted, since
-they identify the provider/incident, not the patient.
+Scope note: treating provider names, the clinic's own letterhead
+(address/phone/name), and the accident scene's street location are
+intentionally left unredacted. None of these are patient identifiers, and
+none are on the HIPAA Safe Harbor list of identifiers to remove (45 CFR
+164.514(b)(2)(i)), which only covers identifiers of the individual (the
+patient) or their relatives, employers, or household members.
 
 ## Repo layout
 
@@ -57,11 +60,20 @@ data/                     input files + redacted/ outputs (gitignored)
 
 Everything except the clinical-transformer eval runs here.
 
+Run this **once** to create the venv and install into it:
+
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_lg
+```
+
+Every time after that, the venv already has everything installed - just
+activate it, no need to re-run `pip install`:
+
+```bash
+source .venv/bin/activate
 ```
 
 ### Clinical-eval environment (`.venv-clinical`) - optional
@@ -78,6 +90,9 @@ be satisfied in one environment, so the clinical-eval path avoids
 presidio-image-redactor entirely and talks to Tesseract directly instead
 (see `redact/ocr_utils.py`).
 
+Run this **once** to create the venv and install into it (this downloads
+`torch`, so it's a bigger/slower install than the main venv):
+
 ```bash
 python3.11 -m venv .venv-clinical
 source .venv-clinical/bin/activate
@@ -85,9 +100,20 @@ pip install -r requirements-clinical.txt
 python -m spacy download en_core_web_sm
 ```
 
+Every time after that, just activate - no need to `pip install` again:
+
+```bash
+source .venv-clinical/bin/activate
+```
+
+(Or skip activating altogether and call the venv's interpreter directly,
+e.g. `.venv-clinical/bin/python redact_clinical_eval.py`.)
+
 ## Usage
 
-All commands below assume the relevant venv is already activated.
+All commands below assume the relevant venv is already activated (see
+Setup above - `pip install` is a one-time step, not needed before every
+run).
 
 ### Production redaction (`.venv`)
 
@@ -121,12 +147,15 @@ Output: `data/redacted/encounters.spacy_eval.md`,
 Same idea, but backed by `obi/deid_roberta_i2b2` instead of generic spaCy
 NER - meaningfully better precision on clinical text, and it produces
 real per-entity confidence scores (spaCy's are a flat constant), so a
-score threshold (`CLINICAL_SCORE_THRESHOLD` in `redact/engine.py`) is
-used to filter out low-confidence noise.
+score threshold is used to filter out low-confidence noise.
 
 ```bash
-python redact_clinical_eval.py
+python redact_clinical_eval.py                        # default threshold (0.6)
+python redact_clinical_eval.py --score-threshold 0.8   # experiment with other cutoffs
 ```
+
+The default comes from `CLINICAL_SCORE_THRESHOLD` in `redact/engine.py`;
+pass `--score-threshold` to try other values without editing code.
 
 Output: `data/redacted/encounters.clinical_eval.md`,
 `data/redacted/Patient_Intake.clinical_eval.jpg`.

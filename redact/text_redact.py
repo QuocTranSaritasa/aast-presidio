@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from presidio_anonymizer import AnonymizerEngine
 
@@ -12,6 +12,7 @@ def redact_markdown_file(
     accident_date: Optional[str] = None,
     eval_entities: Optional[List[str]] = None,
     eval_score_threshold: Optional[float] = None,
+    eval_known_codes: Optional[Set[str]] = None,
     analyzer: Optional[AnalyzerEngine] = None,
 ) -> None:
     text = input_path.read_text(encoding="utf-8")
@@ -24,6 +25,7 @@ def redact_markdown_file(
         accident_date=accident_date,
         eval_entities=eval_entities,
         eval_score_threshold=eval_score_threshold,
+        eval_known_codes=eval_known_codes,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(redacted, encoding="utf-8")

@@ -19,7 +19,9 @@ style single-bracket labels:
     (via redact_clinical_eval.py), never the main .venv. The heavy imports
     are therefore deferred to build_clinical_analyzer_engine() so just
     importing this module never requires torch to be installed."""
-from typing import List, Optional, Tuple
+import csv
+from pathlib import Path
+from typing import List, Optional, Set, Tuple
 
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -40,7 +42,6 @@ from .recognizers import (
 
 CUSTOM_ENTITIES = [
     NameRecognizer.PATIENT,
-    NameRecognizer.PROVIDER,
     NameRecognizer.ATTORNEY,
     AccidentDateRecognizer.ENTITY,
     AccountNumberRecognizer.ENTITY,
@@ -87,7 +88,6 @@ CLINICAL_ENTITIES = [
 
 LABELS = {
     NameRecognizer.PATIENT: "[PATIENT NAME]",
-    NameRecognizer.PROVIDER: "[PROVIDER NAME]",
     NameRecognizer.ATTORNEY: "[ATTORNEY NAME]",
     AccountNumberRecognizer.ENTITY: "[ACCOUNT NUMBER]",
     PatientContactRecognizer.ADDRESS: "[ADDRESS]",
@@ -152,11 +152,28 @@ def _spans_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and a_end > b_start
 
 
+def _exclude_known_codes(
+    text: str, results: List[RecognizerResult], known_codes: Optional[Set[str]]
+) -> List[RecognizerResult]:
+    """Drop any hit whose exact flagged text is a known non-PHI code
+    (see load_cpt_codes). A plain `in` check against a set is an O(1)
+    hash lookup regardless of how many codes are loaded, unlike Presidio's
+    built-in allow_list_match="regex" (used until CLINICAL_ALLOW_LIST was
+    replaced by this) - which joins the whole list into one alternation
+    regex and recompiles it on every analyze() call, an increasingly
+    real cost once the list is a full CPT/HCPCS export rather than a
+    handful of entries."""
+    if not known_codes:
+        return results
+    return [r for r in results if text[r.start : r.end] not in known_codes]
+
+
 def analyze_with_eval(
     text: str,
     analyzer: AnalyzerEngine,
     eval_entities: List[str],
     score_threshold: Optional[float] = None,
+    known_codes: Optional[Set[str]] = None,
 ) -> Tuple[List[RecognizerResult], List[RecognizerResult]]:
     """Run our custom recognizers and the given NER entity set as two
     separate passes (sharing one NLP parse), then keep only the NER hits
@@ -168,7 +185,12 @@ def analyze_with_eval(
     change anything for them anyway). Only meaningful for models with real
     per-entity confidence (e.g. the clinical transformer) - spaCy's NER
     gives every hit the same flat 0.85, so no threshold can separate
-    "confident" from "iffy" there."""
+    "confident" from "iffy" there.
+
+    known_codes drops NER hits whose text is an exact known non-PHI code
+    (e.g. a CPT billing code) - for false positives the model is
+    confidently wrong about regardless of score threshold. See
+    load_cpt_codes / CLINICAL_ENTITIES usage in redact_clinical_eval.py."""
     language = "en"
     nlp_artifacts = analyzer.nlp_engine.process_text(text, language)
 
@@ -188,6 +210,7 @@ def analyze_with_eval(
         for r in ner_results
         if not any(_spans_overlap(r.start, r.end, c.start, c.end) for c in custom_results)
     ]
+    ner_only_results = _exclude_known_codes(text, ner_only_results, known_codes)
     return custom_results, ner_only_results
 
 
@@ -203,11 +226,37 @@ def analyze_with_spacy_eval(
 # as PERSON) score <=0.575. This threshold sits in that gap.
 CLINICAL_SCORE_THRESHOLD = 0.6
 
+def load_cpt_codes(path: Path) -> Set[str]:
+    """Load known procedure-billing codes (CPT/HCPCS) from a CSV file with
+    a "code" column. The model confidently (score >=0.95) mistags these as
+    ID wherever they appear in a billing/procedure-list context (e.g.
+    "- 97110 Therapeutic Exercises." in data/encounters.md) - they're
+    standardized, publicly published billing codes, not patient
+    identifiers, and the same values recur verbatim across every visit in
+    a document (a real per-patient ID wouldn't).
+
+    data/cpt_codes.csv here is a placeholder seeded with the codes
+    observed in data/encounters.md - swap in your organization's real
+    billing-system export or vendor feed at this path (or point callers
+    at a different path) without touching any other code. Values are
+    matched by exact text (see _exclude_known_codes), so this scales to a
+    full CPT/HCPCS export without the per-call regex-recompile cost
+    Presidio's built-in allow_list_match="regex" would incur at that
+    size."""
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return {row["code"].strip() for row in reader if row.get("code", "").strip()}
+
 
 def analyze_with_clinical_eval(
-    text: str, analyzer: AnalyzerEngine, score_threshold: Optional[float] = CLINICAL_SCORE_THRESHOLD
+    text: str,
+    analyzer: AnalyzerEngine,
+    score_threshold: Optional[float] = CLINICAL_SCORE_THRESHOLD,
+    known_codes: Optional[Set[str]] = None,
 ) -> Tuple[List[RecognizerResult], List[RecognizerResult]]:
-    return analyze_with_eval(text, analyzer, CLINICAL_ENTITIES, score_threshold=score_threshold)
+    return analyze_with_eval(
+        text, analyzer, CLINICAL_ENTITIES, score_threshold=score_threshold, known_codes=known_codes
+    )
 
 
 def build_anonymizer_operators(anchor, eval_entities: Optional[List[str]] = None):
@@ -250,6 +299,7 @@ def redact_text(
     accident_date: Optional[str] = None,
     eval_entities: Optional[List[str]] = None,
     eval_score_threshold: Optional[float] = None,
+    eval_known_codes: Optional[Set[str]] = None,
 ) -> str:
     # If the caller supplies the accident date up front (e.g. it's missing
     # from this particular document, so "Date of Accident: ..." can't be
@@ -259,7 +309,7 @@ def redact_text(
 
     if eval_entities:
         custom_results, ner_only_results = analyze_with_eval(
-            text, analyzer, eval_entities, score_threshold=eval_score_threshold
+            text, analyzer, eval_entities, score_threshold=eval_score_threshold, known_codes=eval_known_codes
         )
         results = custom_results + _namespace_eval_only(ner_only_results)
     else:

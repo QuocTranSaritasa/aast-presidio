@@ -5,7 +5,7 @@ which conflicts with the numpy<2 this platform's torch build needs. Only
 usable from .venv-clinical (needs torch/transformers - see
 build_clinical_analyzer_engine)."""
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from PIL import Image, ImageDraw
 
@@ -22,6 +22,7 @@ def redact_image_file_clinical(
     analyzer: AnalyzerEngine,
     accident_date: Optional[str] = None,
     eval_score_threshold: Optional[float] = None,
+    eval_known_codes: Optional[Set[str]] = None,
 ) -> None:
     image = Image.open(input_path).convert("RGB")
 
@@ -30,7 +31,7 @@ def redact_image_file_clinical(
     anchor = parse_date_text(accident_date) if accident_date else find_accident_anchor(ocr_text)
 
     custom_results, ner_only_results = analyze_with_eval(
-        ocr_text, analyzer, eval_entities, score_threshold=eval_score_threshold
+        ocr_text, analyzer, eval_entities, score_threshold=eval_score_threshold, known_codes=eval_known_codes
     )
 
     custom_bboxes = map_results_to_bboxes(custom_results, ocr_result, ocr_text)

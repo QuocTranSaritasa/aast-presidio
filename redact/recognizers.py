@@ -1,8 +1,12 @@
 """Custom Presidio recognizers tailored to this dataset's PHI shapes:
 accident-anchored dates, "Lastname, Firstname" style names (classified by
-surrounding context into patient/provider/attorney), account numbers, and
-the patient's home address/phone (identified via the "Home:" label so the
-clinic's own letterhead address/phone are left untouched)."""
+surrounding context into patient/attorney - provider names are left
+unredacted, since a treating provider's name identifies the provider, not
+the patient, and isn't one of the HIPAA Safe Harbor identifiers, which
+only cover identifiers of the individual/patient or their relatives,
+employers, or household members), account numbers, and the patient's home
+address/phone (identified via the "Home:" label so the clinic's own
+letterhead address/phone are left untouched)."""
 import re
 from typing import List, Optional
 
@@ -14,20 +18,6 @@ from .date_logic import DATE_PATTERN_REGEXES, DATE_SUBGROUP_REGEXES
 # OCR sometimes renders the "Lastname, Firstname" comma as a semicolon.
 NAME_RE = re.compile(r"\b[A-Z][A-Za-z'\-]+\s*[,;]\s*[A-Z][a-z]+\b")
 
-# "Firstname Lastname" directly followed by a credential, e.g. "Sabrina
-# Browning MD" or "Alexander Barrera, DPT" (allow an optional comma before
-# the credential for the latter form).
-PROVIDER_CREDENTIAL_RE = re.compile(
-    r"\b([A-Z][a-z]+\s+[A-Z][a-z]+)(?=,?\s+(?:MD\b|M\.D\.?\b|DPT\b|PT,|FNP))"
-)
-
-# Plain "Firstname Lastname" (no comma, no trailing credential) directly
-# after a strong provider-identifying label.
-LABEL_PROVIDER_RE = re.compile(
-    r"(?:Progress Notes|[Ee]lectronically signed by(?:\s+Provider)?)\s*:?\s*"
-    r"([A-Z][a-z]+(?:[-\s][A-Z][a-z]+){1,3})"
-)
-
 # "The Law Office of Zayed Al Sayyed" style attorney mentions. OCR
 # sometimes reorders this to "The Office of Zayed Al Sayyed Law", so match
 # both "Law"-before and "Law"-after variants.
@@ -36,12 +26,18 @@ ATTORNEY_NAME_RE = re.compile(
     r"|Office of\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3})\s+Law\b"
 )
 
-PROVIDER_CONTEXT = re.compile(
+ATTORNEY_CONTEXT = re.compile(r"(law office|attorney|esq\.?)", re.IGNORECASE)
+# A "Lastname, Firstname" match next to a provider-signature label (e.g.
+# "Reported by: Agrait-Bertran, Edgardo M.D") must never fall through to
+# PATIENT_CONTEXT below - this document is dense enough that such a match
+# regularly sits within CONTEXT_WINDOW of an unrelated nearby DOB/Acc No
+# header purely by document density, which would otherwise
+# misclassify the provider's name as PATIENT_NAME.
+PROVIDER_SIGNATURE_CONTEXT = re.compile(
     r"(signed by|reported by|progress notes?:|provider:|\bmd\b|\bm\.d\b|"
     r"\bdpt\b|\bpt,|\bfnp\b|electronically signed)",
     re.IGNORECASE,
 )
-ATTORNEY_CONTEXT = re.compile(r"(law office|attorney|esq\.?)", re.IGNORECASE)
 # Only treat a "Word, Word" match as the patient's name if it actually sits
 # near patient-identifying context - this doc is full of unrelated
 # comma-separated clinical term pairs ("Ultrasound, Strapping", "Visit,
@@ -95,15 +91,15 @@ class AccidentDateRecognizer(EntityRecognizer):
 
 class NameRecognizer(EntityRecognizer):
     """Detects "Lastname, Firstname" style names and classifies each hit
-    as a patient, provider, or attorney name based on nearby context."""
+    as a patient or attorney name based on nearby context. Provider names
+    are deliberately not detected/redacted - see module docstring."""
 
     PATIENT = "PATIENT_NAME"
-    PROVIDER = "PROVIDER_NAME"
     ATTORNEY = "ATTORNEY_NAME"
 
     def __init__(self):
         super().__init__(
-            supported_entities=[self.PATIENT, self.PROVIDER, self.ATTORNEY],
+            supported_entities=[self.PATIENT, self.ATTORNEY],
             name="NameRecognizer",
         )
 
@@ -116,8 +112,8 @@ class NameRecognizer(EntityRecognizer):
         window = text[window_start:window_end]
         if ATTORNEY_CONTEXT.search(window):
             return self.ATTORNEY
-        if PROVIDER_CONTEXT.search(window):
-            return self.PROVIDER
+        if PROVIDER_SIGNATURE_CONTEXT.search(window):
+            return None
         if PATIENT_CONTEXT.search(window):
             line_start = text.rfind("\n", 0, start) + 1
             if PROCEDURE_CODE_LINE_RE.match(text, line_start):
@@ -149,20 +145,6 @@ class NameRecognizer(EntityRecognizer):
             results.append(RecognizerResult(entity_type=self.ATTORNEY, start=start, end=end, score=0.85))
             claimed_spans.append((start, end))
 
-        for match in PROVIDER_CREDENTIAL_RE.finditer(text):
-            start, end = match.start(1), match.end(1)
-            if _overlaps(start, end):
-                continue
-            results.append(RecognizerResult(entity_type=self.PROVIDER, start=start, end=end, score=0.85))
-            claimed_spans.append((start, end))
-
-        for match in LABEL_PROVIDER_RE.finditer(text):
-            start, end = match.start(1), match.end(1)
-            if _overlaps(start, end):
-                continue
-            results.append(RecognizerResult(entity_type=self.PROVIDER, start=start, end=end, score=0.85))
-            claimed_spans.append((start, end))
-
         # Second pass, PATIENT only: OCR/documentation sometimes drops one
         # half of a "Lastname, Firstname" match (e.g. a provider writes the
         # patient's first name directly instead of "Patient"), leaving a
@@ -170,9 +152,9 @@ class NameRecognizer(EntityRecognizer):
         # Once we reliably know the patient's last/first name components
         # from clean, context-gated PATIENT matches above, sweep for
         # standalone recurrences of those exact words at a lower score.
-        # Scoped to PATIENT only (never PROVIDER/ATTORNEY, where common
-        # given/family names are far more likely to collide with ordinary
-        # words elsewhere in a clinical note).
+        # Scoped to PATIENT only (never ATTORNEY, where common given/family
+        # names are far more likely to collide with ordinary words
+        # elsewhere in a clinical note).
         known_patient_words = {
             word
             for result in results
