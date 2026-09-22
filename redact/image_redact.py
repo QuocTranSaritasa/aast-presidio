@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PIL import Image, ImageDraw
 from presidio_image_redactor import ImageAnalyzerEngine
@@ -15,10 +15,11 @@ def redact_image_file(
     accident_date: Optional[str] = None,
     eval_entities: Optional[List[str]] = None,
     analyzer: Optional[AnalyzerEngine] = None,
+    patient_demographics: Optional[Dict[str, str]] = None,
 ) -> None:
     image = Image.open(input_path).convert("RGB")
 
-    analyzer = analyzer or build_analyzer_engine()
+    analyzer = analyzer or build_analyzer_engine(patient_demographics=patient_demographics)
     image_analyzer = ImageAnalyzerEngine(analyzer_engine=analyzer)
 
     ocr_result = image_analyzer.ocr.perform_ocr(image)

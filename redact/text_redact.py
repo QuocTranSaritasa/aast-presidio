@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from presidio_anonymizer import AnonymizerEngine
 
@@ -14,9 +14,15 @@ def redact_markdown_file(
     eval_score_threshold: Optional[float] = None,
     eval_known_codes: Optional[Set[str]] = None,
     analyzer: Optional[AnalyzerEngine] = None,
+    patient_demographics: Optional[Dict[str, str]] = None,
 ) -> None:
+    """patient_demographics is only applied when this function builds its
+    own analyzer (i.e. `analyzer` is not supplied) - a caller passing in a
+    pre-built analyzer (e.g. redact_clinical_eval.py) must bake the
+    demographics into that analyzer itself via
+    build_clinical_analyzer_engine(patient_demographics=...)."""
     text = input_path.read_text(encoding="utf-8")
-    analyzer = analyzer or build_analyzer_engine()
+    analyzer = analyzer or build_analyzer_engine(patient_demographics=patient_demographics)
     anonymizer = AnonymizerEngine()
     redacted = redact_text(
         text,

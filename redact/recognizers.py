@@ -7,8 +7,10 @@ only cover identifiers of the individual/patient or their relatives,
 employers, or household members), account numbers, and the patient's home
 address/phone (identified via the "Home:" label so the clinic's own
 letterhead address/phone are left untouched)."""
+import json
 import re
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
@@ -318,8 +320,87 @@ class StateRecognizer(EntityRecognizer):
         ]
 
 
-def build_custom_recognizers():
-    return [
+class PatientDemographicRecognizer(EntityRecognizer):
+    """Naive verbatim search-and-replace, driven by an out-of-band patient
+    demographic record (see load_patient_demographics) instead of a shape
+    pattern. Every non-empty field value is searched for as an exact,
+    case-insensitive, whole-word match anywhere in the document - this
+    catches recurrences the shape/context recognizers above miss (e.g. a
+    preferred name that doesn't follow the "Lastname, Firstname" pattern
+    NameRecognizer looks for), but only for values already known ahead of
+    time. It can't find PHI it wasn't told about, so it's a supplement to
+    the other recognizers here, not a replacement for them."""
+
+    EMAIL = "EMAIL"
+    SSN = "SSN"
+
+    # Maps each demographic field to the entity type it's redacted as.
+    # Reuses the other recognizers' entity types where one already exists
+    # (e.g. a phone number found this way gets the same [PHONE NUMBER]
+    # label PatientContactRecognizer produces) so downstream labeling stays
+    # consistent regardless of which recognizer caught a given hit.
+    FIELD_ENTITY_MAP = {
+        "Preferred Name": NameRecognizer.PATIENT,
+        "Previous Name": NameRecognizer.PATIENT,
+        "Prefix": NameRecognizer.PATIENT,
+        "Suffix": NameRecognizer.PATIENT,
+        "Sex": AgeSexRecognizer.SEX,
+        "Cell Phone": PatientContactRecognizer.PHONE,
+        "Home Phone": PatientContactRecognizer.PHONE,
+        "Work Phone": PatientContactRecognizer.PHONE,
+        "Email": EMAIL,
+        "SSN": SSN,
+        "Acc No": AccountNumberRecognizer.ENTITY,
+    }
+
+    # A naive whole-value match shorter than this is too likely to collide
+    # with an ordinary word/abbreviation elsewhere in the document (e.g. a
+    # single-letter "Sex": "M" would redact every standalone "M" in the
+    # text) - skip it rather than over-redact.
+    MIN_VALUE_LENGTH = 3
+
+    def __init__(self, demographics: Dict[str, str]):
+        super().__init__(
+            supported_entities=sorted(set(self.FIELD_ENTITY_MAP.values())),
+            name="PatientDemographicRecognizer",
+        )
+        self.demographics = demographics
+
+    def load(self) -> None:
+        pass
+
+    def analyze(self, text: str, entities: List[str], nlp_artifacts: Optional[NlpArtifacts]) -> List[RecognizerResult]:
+        results = []
+        for field, entity_type in self.FIELD_ENTITY_MAP.items():
+            value = (self.demographics.get(field) or "").strip()
+            if len(value) < self.MIN_VALUE_LENGTH:
+                continue
+            # Not \b: a value ending in punctuation (e.g. "Prefix": "Ms.")
+            # has no word/non-word *transition* right after it when
+            # followed by a space, so \b would silently never match it.
+            # (?<!\w)/(?!\w) check the adjacent character in isolation
+            # instead, which handles that correctly.
+            pattern = re.compile(
+                r"(?<!\w)" + re.escape(value) + r"(?!\w)", re.IGNORECASE
+            )
+            for match in pattern.finditer(text):
+                results.append(
+                    RecognizerResult(entity_type=entity_type, start=match.start(), end=match.end(), score=1.0)
+                )
+        return results
+
+
+def load_patient_demographics(path: Path) -> Dict[str, str]:
+    """Load a single patient's demographic record from a JSON file (see
+    data/patient_demographics.json for the expected fields). Missing or
+    empty fields are simply skipped by PatientDemographicRecognizer, so a
+    partially-filled record is fine."""
+    with Path(path).open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def build_custom_recognizers(patient_demographics: Optional[Dict[str, str]] = None):
+    recognizers = [
         AccidentDateRecognizer(),
         NameRecognizer(),
         AccountNumberRecognizer(),
@@ -327,3 +408,6 @@ def build_custom_recognizers():
         AgeSexRecognizer(),
         StateRecognizer(),
     ]
+    if patient_demographics:
+        recognizers.append(PatientDemographicRecognizer(patient_demographics))
+    return recognizers

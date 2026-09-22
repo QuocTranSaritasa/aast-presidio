@@ -36,6 +36,7 @@ from .recognizers import (
     AgeSexRecognizer,
     NameRecognizer,
     PatientContactRecognizer,
+    PatientDemographicRecognizer,
     StateRecognizer,
     build_custom_recognizers,
 )
@@ -50,6 +51,11 @@ CUSTOM_ENTITIES = [
     AgeSexRecognizer.AGE,
     AgeSexRecognizer.SEX,
     StateRecognizer.ENTITY,
+    # Only ever produced when a PatientDemographicRecognizer is registered
+    # (i.e. patient_demographics was supplied) - harmless to request
+    # unconditionally otherwise, since nothing else produces these types.
+    PatientDemographicRecognizer.EMAIL,
+    PatientDemographicRecognizer.SSN,
 ]
 
 # Presidio's SpacyRecognizer, used only for side-by-side evaluation against
@@ -95,16 +101,24 @@ LABELS = {
     AgeSexRecognizer.AGE: "[AGE]",
     AgeSexRecognizer.SEX: "[SEX]",
     StateRecognizer.ENTITY: "[STATE]",
+    PatientDemographicRecognizer.EMAIL: "[EMAIL]",
+    PatientDemographicRecognizer.SSN: "[SSN]",
 }
 
 
-def build_analyzer_engine() -> AnalyzerEngine:
+def build_analyzer_engine(patient_demographics: Optional[dict] = None) -> AnalyzerEngine:
     """A spaCy NLP engine, our custom recognizers, and (registered but
     dormant) Presidio's stock SpacyRecognizer. Requesting exactly
     CUSTOM_ENTITIES from analyze() means the registry never invokes
     SpacyRecognizer (its supported entities aren't in that list) - it only
     runs when analyze() is explicitly called with entities=SPACY_ENTITIES,
-    i.e. via analyze_with_spacy_eval()."""
+    i.e. via analyze_with_spacy_eval().
+
+    patient_demographics, if given (see load_patient_demographics),
+    additionally registers a PatientDemographicRecognizer that does a
+    naive verbatim search/replace for that one patient's known field
+    values - see redact/recognizers.py for why this is a supplement to the
+    other recognizers, not a replacement."""
     provider = NlpEngineProvider(
         nlp_configuration={
             "nlp_engine_name": "spacy",
@@ -114,25 +128,25 @@ def build_analyzer_engine() -> AnalyzerEngine:
     nlp_engine = provider.create_engine()
 
     registry = RecognizerRegistry()
-    for recognizer in build_custom_recognizers():
+    for recognizer in build_custom_recognizers(patient_demographics=patient_demographics):
         registry.add_recognizer(recognizer)
     registry.add_recognizer(SpacyRecognizer(supported_entities=SPACY_ENTITIES))
 
     return AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"])
 
 
-def build_clinical_analyzer_engine() -> AnalyzerEngine:
-    """Same custom recognizers as build_analyzer_engine(), but backed by
-    obi/deid_roberta_i2b2 (a RoBERTa model fine-tuned on the i2b2 clinical
-    de-identification dataset) instead of generic spaCy NER, for
-    evaluation. Only usable from .venv-clinical - see the module
-    docstring for why."""
+def build_clinical_analyzer_engine(patient_demographics: Optional[dict] = None) -> AnalyzerEngine:
+    """Same custom recognizers as build_analyzer_engine() (including the
+    same optional patient_demographics), but backed by obi/deid_roberta_i2b2
+    (a RoBERTa model fine-tuned on the i2b2 clinical de-identification
+    dataset) instead of generic spaCy NER, for evaluation. Only usable from
+    .venv-clinical - see the module docstring for why."""
     from presidio_analyzer.nlp_engine import TransformersNlpEngine
 
     nlp_engine = TransformersNlpEngine()  # defaults to obi/deid_roberta_i2b2 + en_core_web_sm
 
     registry = RecognizerRegistry()
-    for recognizer in build_custom_recognizers():
+    for recognizer in build_custom_recognizers(patient_demographics=patient_demographics):
         registry.add_recognizer(recognizer)
     registry.add_recognizer(SpacyRecognizer(supported_entities=CLINICAL_ENTITIES))
 

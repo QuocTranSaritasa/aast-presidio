@@ -27,11 +27,13 @@ from redact.engine import (
     build_clinical_analyzer_engine,
     load_cpt_codes,
 )
+from redact.recognizers import load_patient_demographics
 from redact.text_redact import redact_markdown_file
 
 DATA_DIR = Path(__file__).parent / "data"
 OUT_DIR = DATA_DIR / "redacted"
 DEFAULT_CPT_CODES_FILE = DATA_DIR / "cpt_codes.csv"
+DEFAULT_PATIENT_JSON = DATA_DIR / "patient_demographics.json"
 
 
 def main():
@@ -60,12 +62,26 @@ def main():
             "empty file to disable this filtering."
         ),
     )
+    parser.add_argument(
+        "--patient-json",
+        type=Path,
+        default=DEFAULT_PATIENT_JSON,
+        help=(
+            "JSON file with one patient's known demographic fields (see "
+            f"data/patient_demographics.json for the expected shape, "
+            f"default: {DEFAULT_PATIENT_JSON}). Pass a nonexistent path to "
+            "disable this."
+        ),
+    )
     args = parser.parse_args()
 
     known_codes = load_cpt_codes(args.cpt_codes_file) if args.cpt_codes_file.exists() else set()
+    patient_demographics = (
+        load_patient_demographics(args.patient_json) if args.patient_json.exists() else None
+    )
 
     print("Loading obi/deid_roberta_i2b2 (custom recognizers + clinical NER eval)...")
-    analyzer = build_clinical_analyzer_engine()
+    analyzer = build_clinical_analyzer_engine(patient_demographics=patient_demographics)
 
     text_src = DATA_DIR / "encounters.md"
     text_dst = OUT_DIR / "encounters.clinical_eval.md"
